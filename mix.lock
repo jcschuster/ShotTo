@@ -1,0 +1,4 @@
+%{
+  "nimble_parsec": {:hex, :nimble_parsec, "1.4.2", "8efba0122db06df95bfaa78f791344a89352ba04baedd3849593bfce4d0dc1c6", [:mix], [], "hexpm", "4b21398942dda052b403bbe1da991ccd03a053668d147d53fb8c4e0efe09c973"},
+  "shot_ds": {:hex, :shot_ds, "1.0.2", "db84150408afa0badc0d903be9838bcd0e56451f197bf661201f4f98526b50c0", [:mix], [{:nimble_parsec, "~> 1.4.2", [hex: :nimble_parsec, repo: "hexpm", optional: false]}], "hexpm", "50a9e9995ab31b1de6022e114c0e4e3c4dfdb592b57e35de6d324578ddb08b7c"},
+}
