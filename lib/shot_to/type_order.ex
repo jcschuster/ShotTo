@@ -46,26 +46,16 @@ defmodule ShotTo.TypeOrder do
     Parameters.sort_prec(params, lhs.goal) > Parameters.sort_prec(params, rhs.goal)
   end
 
-  # A base type cannot dominate a proper arrow type: the order is contained
-  # in `(≻_S ∪ ▷_r)⁺`, and neither extends a base on the left of an arrow
-  # without first descending to the `▷_r` case (which produces either a base
-  # or a strictly simpler arrow — never a larger one).
   defp do_type_gt?(%Type{args: []}, %Type{args: [_ | _]}, _params), do: false
 
-  # Proper arrow on the left: lhs = (t → u) with u = %Type{goal: lhs.goal, args: u_args}.
-  # We apply the inductive rule: (T → U) ≻_T V iff V = U (the right-argument
-  # relation) or V = T → V' with U ≻_T V'.
   defp do_type_gt?(%Type{args: [t | u_args]} = lhs, rhs, params) do
     u = %Type{goal: lhs.goal, args: u_args}
 
     rhs == u or
       case rhs do
-        # rhs is base: can only equal u (handled above) — otherwise false.
         %Type{args: []} ->
           false
 
-        # rhs = t' → u'. For the right-congruence rule we need t == t' and
-        # then a strict decrease on the right.
         %Type{args: [t_rhs | u_rhs_args]} = rhs_full ->
           t == t_rhs and
             do_type_gt?(u, %Type{goal: rhs_full.goal, args: u_rhs_args}, params)

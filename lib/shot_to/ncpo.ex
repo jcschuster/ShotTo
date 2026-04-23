@@ -15,38 +15,12 @@ defmodule ShotTo.Ncpo do
   `mul_ext?`, and `lex_ext?` mirror the ones in `OrderingLnf.hs` of the
   Haskell reference (`https://github.com/niedjoh/hrsterm`).
 
-  ## Divergences from the reference
-
-  Two points where this implementation diverges from the prototype at
-  `hrsterm` deserve explicit note; both are conservative (they only ever
-  *shrink* the ordering):
-
-    * `lex_ext?/3` compares the residual tail of the right-hand side (the
-      `u_j`'s) against `f(t̄)`, matching the Haskell reference and standard
-      RPO convention. The paper's `⟨F=lex⟩` clause appears to say `t_j`
-      instead of `u_j`, which we treat as a typo.
-
-    * `mul_ext?/3` additionally requires the LHS-unique multiset
-      `ss \\\\ ts` to be non-empty. Without that check, equal multisets
-      compare as `greater` (since the universal quantifier is vacuously
-      satisfied), which contradicts strictness. The Haskell reference
-      omits this check; for termination of rewrite systems its absence is
-      masked by other conditions on `ncpoMul`'s call sites, but for a
-      decision procedure on pairs of terms it must be made explicit.
-
-  ## Fresh variables
-
-  Every time the algorithm opens a lambda (in `⟨Fλ⟩`, `⟨λ▷⟩`, `⟨λ=⟩`,
-  `⟨λ≠⟩`) it does so by applying the abstraction to a freshly generated
-  `ShotDs` free variable, keeping every intermediate term well-typed. This
-  is more careful than the Haskell reference, which at `⟨λ≠⟩` reuses a
-  fresh variable of the LHS binder's type on both sides — unproblematic in
-  the untyped `ATerm` representation but ill-typed in a typed DAG.
-
-  Callers that care about the size of the global ETS term pool should
-  invoke `ShotDs.Stt.TermFactory.with_scratchpad/1` (or
-  `with_scratchpad!`) around their calls; the fresh variables generated
-  during a comparison will then be collected when the scratchpad exits.
+  > ## Note {:.info}
+  >
+  > Callers that care about the size of the global ETS term pool should
+  > invoke `ShotDs.Stt.TermFactory.with_scratchpad/1` (or
+  > `with_scratchpad!`) around their calls; the fresh variables generated
+  > during a comparison will then be collected when the scratchpad exits.
   """
 
   alias ShotDs.Data.{Declaration, Term}
@@ -65,10 +39,6 @@ defmodule ShotTo.Ncpo do
   """
   @type x_set :: MapSet.t(Declaration.t())
 
-  ##############################################################################
-  # PUBLIC ENTRY POINT
-  ##############################################################################
-
   @doc """
   Decides `s >^1_τ t`, i.e. whether the left term is strictly greater than
   the right in NCPO-LNF with the given parameters.
@@ -85,10 +55,6 @@ defmodule ShotTo.Ncpo do
     end)
   end
 
-  ##############################################################################
-  # MAIN INDUCTIVE PREDICATE
-  ##############################################################################
-
   @doc false
   @spec ncpo(b(), x_set(), Term.term_id(), Term.term_id(), boolean(), Parameters.t()) ::
           boolean()
@@ -101,10 +67,6 @@ defmodule ShotTo.Ncpo do
     type_check_ok? and dispatch_on_s(b, x, s_id, s, t_id, t, params)
   end
 
-  # Case analysis on the head shape of s. NCPO-LNF is defined only for
-  # *nonversatile* left-hand sides, i.e. fully applied constants or
-  # lambda abstractions. A term headed by a variable is versatile and no
-  # rule can fire.
   defp dispatch_on_s(b, x, s_id, %Term{bvars: []} = s, t_id, t, params) do
     case s.head.kind do
       :co -> ncpo_const_head(b, x, s_id, s, t_id, t, params)
@@ -116,10 +78,6 @@ defmodule ShotTo.Ncpo do
     ncpo_lam_head(b, x, s_id, s, t_id, t, params)
   end
 
-  ##############################################################################
-  # RULES WITH A CONSTANT-HEADED LEFT-HAND SIDE
-  ##############################################################################
-
   # s = f(t̄). Try ⟨FX⟩, ⟨F▷⟩, then dispatch on the shape of t.
   defp ncpo_const_head(b, x, s_id, s, t_id, t, params) do
     fx_rule?(x, t_id) or
@@ -128,9 +86,6 @@ defmodule ShotTo.Ncpo do
   end
 
   # ⟨FX⟩:  f(t̄) >^{b,X} y↑η if y ∈ X.
-  # Free variables in X are stored as Declarations; `TF.make_term/1` gives
-  # their η-expanded term representation. Equality of term IDs is then
-  # structural equality (modulo DAG sharing).
   defp fx_rule?(x, t_id) do
     Enum.any?(x, fn %Declaration{} = y -> TF.make_term(y) == t_id end)
   end
@@ -181,7 +136,6 @@ defmodule ShotTo.Ncpo do
     end
   end
 
-  # Helper for ⟨F=mul⟩ / ⟨F=lex⟩, the argument list comparison.
   defp same_head_compare(b, x, _s_id, _s, ss, ts, :mul, params) do
     mul_ext?(ss, ts, fn si, tj -> sswo?(b, x, si, tj, params) end)
   end
@@ -207,21 +161,10 @@ defmodule ShotTo.Ncpo do
   end
 
   # ⟨Fλ⟩:  f(t̄) >^{b,X} λy.v if f(t̄) >^{b,X∪{z}} v[y/z], z fresh with τ(z)=τ(y).
-  #
-  # Opening v[y/z] is implemented by applying the abstraction `t_id` (which
-  # represents λy.v — possibly with further binders nested inside `v`) to a
-  # fresh free variable `z` of the outermost binder's type. β-normalisation
-  # inside `make_appl_term` handles the substitution; the resulting term
-  # has one fewer outer binder and `z` occurs free wherever `y` used to be
-  # bound.
   defp ncpo_flam_rule(b, x, s_id, t_id, params) do
     {z, opened_id} = open_outermost!(t_id)
     ncpo(b, MapSet.put(x, z), s_id, opened_id, false, params)
   end
-
-  ##############################################################################
-  # RULES WITH A LAMBDA-HEADED LEFT-HAND SIDE
-  ##############################################################################
 
   # s = λx.u. Try ⟨λ▷⟩ with s opened on a fresh z, then ⟨λ=⟩/⟨λ≠⟩ if t is
   # itself an abstraction.
@@ -254,30 +197,15 @@ defmodule ShotTo.Ncpo do
     ncpo_weak(b, x, u_prime_id, v_id, true, params)
   end
 
-  ##############################################################################
-  # WEAK VERSIONS (REFLEXIVE CLOSURE)
-  ##############################################################################
-
   @doc false
   @spec ncpo_weak(b(), x_set(), Term.term_id(), Term.term_id(), boolean(), Parameters.t()) ::
           boolean()
   def ncpo_weak(b, x, s_id, t_id, type_check?, params) do
-    # Term IDs are canonical (the factory memoises structurally equal
-    # terms to the same integer), so `==` suffices for syntactic equality.
     s_id == t_id or ncpo(b, x, s_id, t_id, type_check?, params)
   end
 
-  ##############################################################################
-  # SUBTERM RELATIONS: bawo, awo, acc_subt
-  ##############################################################################
-
   # `bawo(b, s, v)` ⇔ s (⊵^{nv}_b · ⊵_a · ≥^b_τ) v, where the first step may
   # take zero or more nonversatile descents. Used by ⟨F▷⟩.
-  #
-  # The set of *opened* variables introduced while descending through
-  # lambdas inside s tracks the paper's "FV(t) ⊆ FV(s)" condition: a
-  # reached subterm may only be compared with v if v does not reference
-  # any of those opened variables (they live purely in the interior of s).
   defp bawo(b, s_id, v_id, params) do
     awo(b, s_id, v_id, params) or
       bawo_descend(b, s_id, v_id, MapSet.new(), _rec_case? = false, params)
@@ -312,8 +240,6 @@ defmodule ShotTo.Ncpo do
     end
   end
 
-  # Returns true if the term with the given ID mentions any of the given
-  # free-variable declarations.
   defp contains_any_fv?(_term_id, opened) when opened == %MapSet{}, do: false
 
   defp contains_any_fv?(term_id, opened) do
@@ -345,18 +271,9 @@ defmodule ShotTo.Ncpo do
     end
   end
 
-  ##############################################################################
-  # STRUCTURALLY SMALLER + WEAK ORIENT (sswo)
-  ##############################################################################
-
   # `sswo(b, X, s, t)` ⇔ s ≥^b_τ t OR (τ(s) is a base sort a and there is
   # an accessible subterm u of s together with variables x_1, …, x_n ∈ X
   # of admissible types with u x_1 … x_n = t).
-  #
-  # Used as the base comparator of `mul_ext?` and `lex_ext?` in ⟨F=mul⟩ /
-  # ⟨F=lex⟩ (the union `>^b_τ ∪ ▷^X_@ · →!_β` of Figure 1). Because our
-  # terms are always kept in βη-long NF, the `→!_β` step is absorbed by
-  # `TF.make_appl_term!` and structural equality suffices for the match.
   defp sswo?(b, x, s_id, t_id, params) do
     ncpo_weak(b, MapSet.new(), s_id, t_id, true, params) or
       structurally_smaller_app?(b, x, s_id, t_id, params)
@@ -369,9 +286,6 @@ defmodule ShotTo.Ncpo do
       acc_subt_apply(s_id, t_id, s.type.goal, x, params)
   end
 
-  # Walks the accessible-subterm tree of `s_id` and, at every step, asks
-  # whether the current subterm can be extended by a sequence of variables
-  # from X to produce the target `t_id`.
   defp acc_subt_apply(s_id, t_id, base_sort, x, params) do
     case TF.get_term!(s_id) do
       %Term{bvars: [], head: %Declaration{kind: :co, name: f}, args: args} ->
@@ -388,19 +302,13 @@ defmodule ShotTo.Ncpo do
     end
   end
 
-  # Tries all tuples (x_1, …, x_n) ∈ X^n matching the argument types of
-  # `u_id` and checks whether any of the resulting βη-long-NF applications
-  # is syntactically equal to `t_id`.
   defp try_apply_vars_match?(u_id, t_id, base_sort, x) do
     %Term{type: u_type} = TF.get_term!(u_id)
 
     cond do
-      # u must ultimately return the same base sort as s.
       u_type.goal != base_sort ->
         false
 
-      # And the base sort must not appear in any of u's argument types
-      # (Pos_a(T_i) = ∅ in the paper).
       Enum.any?(u_type.args, fn arg_type -> TypeOrder.occurs_in?(base_sort, arg_type) end) ->
         false
 
@@ -432,10 +340,6 @@ defmodule ShotTo.Ncpo do
     for x <- xs, r <- rest_combos, do: [x | r]
   end
 
-  ##############################################################################
-  # MULTISET AND LEXICOGRAPHIC EXTENSIONS
-  ##############################################################################
-
   @doc false
   @spec mul_ext?([Term.term_id()], [Term.term_id()], (Term.term_id(), Term.term_id() -> boolean())) ::
           boolean()
@@ -443,11 +347,6 @@ defmodule ShotTo.Ncpo do
     ss_minus_ts = multiset_diff(ss, ts)
     ts_minus_ss = multiset_diff(ts, ss)
 
-    # Multiset extension of a strict order on term IDs. The strictness
-    # requirement translates to "ss \\ ts must be non-empty" — otherwise
-    # an identical-multiset pair would vacuously satisfy the universal
-    # quantifier below. The Haskell reference omits this check; see the
-    # module docs for context.
     not Enum.empty?(ss_minus_ts) and
       Enum.all?(ts_minus_ss, fn t ->
         Enum.any?(ss_minus_ts, fn s -> comp.(s, t) end)
@@ -474,24 +373,13 @@ defmodule ShotTo.Ncpo do
     end
   end
 
-  # List-based multiset difference. For small argument lists this linear
-  # scan is easily fast enough; a grouped-count implementation would buy
-  # little on the typical RHS/LHS sizes encountered in NCPO.
   defp multiset_diff(xs, ys) do
     Enum.reduce(ys, xs, fn y, acc -> List.delete(acc, y) end)
   end
 
-  ##############################################################################
-  # LAMBDA OPENING
-  ##############################################################################
-
   # Opens the outermost abstraction of the given term by applying it to a
   # freshly generated free variable of the binder's type. Returns the pair
   # of (the fresh variable's declaration, the resulting term's ID).
-  #
-  # The ShotDs term factory's β-reduction inside `make_appl_term!` strips
-  # the outer binder and substitutes the fresh variable for the bound
-  # variable; the result remains in βη-long normal form.
   @spec open_outermost!(Term.term_id()) :: {Declaration.free_var_t(), Term.term_id()}
   defp open_outermost!(term_id) do
     %Term{bvars: [%Declaration{type: bv_type} | _]} = TF.get_term!(term_id)
@@ -500,13 +388,6 @@ defmodule ShotTo.Ncpo do
     {z, TF.make_appl_term!(term_id, z_term_id)}
   end
 
-  ##############################################################################
-  # SCRATCHPAD WRAPPER (boolean-returning variant of TF.with_scratchpad!/1)
-  ##############################################################################
-
-  # `TF.with_scratchpad!/1` is designed to commit a final term ID back to
-  # the global pool; we just want a boolean. This wrapper mirrors its
-  # ownership logic without any commit.
   defp with_scratchpad_bool(fun) when is_function(fun, 0) do
     own_scratchpad? = is_nil(Process.get(:term_scratchpad))
     if own_scratchpad?, do: TF.start_scratchpad()

@@ -83,8 +83,7 @@ defmodule ShotTo do
 
   Because NCPO-LNF is not (yet known to be) transitive, the `:incomparable`
   case is a genuine possibility even for terms that intuitively "ought to
-  be" comparable under some total ordering. Callers that merely need to
-  orient an equation can use `gt?/2,3` directly.
+  be" comparable under some total ordering.
 
   Two NCPO-LNF calls are made in the worst case (once in each direction).
   Both are run inside a single scratchpad so intermediate fresh variables
