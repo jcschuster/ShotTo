@@ -1,0 +1,21 @@
+# Demo of the ShotTo NCPO Implementation
+
+```elixir
+Mix.install([
+  {:shot_to, path: Path.join(__DIR__, "..")}
+])
+```
+
+## Setup
+
+```elixir
+import ShotDs.Hol.Sigils
+```
+
+## NCPO Test Cases
+
+```elixir
+with_context(~e[], fn ->
+  ShotTo.compare(~f"p & q", ~f"(p | ~q) & (q | ~p)")
+end)
+```
