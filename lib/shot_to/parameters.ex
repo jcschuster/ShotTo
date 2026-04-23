@@ -119,7 +119,6 @@ defmodule ShotTo.Parameters do
 
   ## Example
 
-      iex> import ShotDs.Hol.Definitions
       iex> alias ShotTo.Parameters
       iex> params = Parameters.new(
       ...>   const_precedence: %{"f" => 2, "g" => 1, "c" => 0},
