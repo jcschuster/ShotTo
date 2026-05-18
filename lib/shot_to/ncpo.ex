@@ -313,23 +313,25 @@ defmodule ShotTo.Ncpo do
         false
 
       true ->
-        arg_types = u_type.args
+        do_try_apply_vars_match?(u_type.args, u_id, t_id, x)
+    end
+  end
 
-        candidates =
-          Enum.map(arg_types, fn arg_type ->
-            Enum.filter(x, fn %Declaration{type: vt} -> vt == arg_type end)
-          end)
+  defp do_try_apply_vars_match?(arg_types, u_id, t_id, x) do
+    candidates =
+      Enum.map(arg_types, fn arg_type ->
+        Enum.filter(x, fn %Declaration{type: vt} -> vt == arg_type end)
+      end)
 
-        if Enum.any?(candidates, &Enum.empty?/1) do
-          false
-        else
-          candidates
-          |> all_combinations()
-          |> Enum.any?(fn var_list ->
-            var_terms = Enum.map(var_list, &TF.make_term/1)
-            TF.fold_apply!(u_id, var_terms) == t_id
-          end)
-        end
+    if Enum.any?(candidates, &Enum.empty?/1) do
+      false
+    else
+      candidates
+      |> all_combinations()
+      |> Enum.any?(fn var_list ->
+        var_terms = Enum.map(var_list, &TF.make_term/1)
+        TF.fold_apply!(u_id, var_terms) == t_id
+      end)
     end
   end
 
