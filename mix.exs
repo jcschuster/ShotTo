@@ -38,13 +38,6 @@ defmodule ShotTo.MixProject do
     An Elixir implementation of NCPO-LNF (the βη-long-normal Computability Path
     Order of Niederhauser and Middeldorp) for ordering terms in Church's simple
     type theory as represented by the `shot_ds` library.
-
-    The order decides, given two terms s and t and a choice of ordering
-    parameters (sort/constant precedences, symbol statuses, basic sorts,
-    accessibility), whether s > t in NCPO-LNF. It is intended for use as an
-    orientation order in higher-order tableau and other theorem-proving
-    settings that need a concrete decision procedure rather than an SMT
-    constraint.
     """
   end
 
