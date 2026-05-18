@@ -14,7 +14,7 @@ primarily as an orientation order for a higher-order tableau prover.
 
 Given two terms _s_ and _t_ in βη-long normal form and a choice of
 _ordering parameters_, `ShotTo` decides the boolean predicate
-**s >¹_τ t** of Definition 8 of the paper. It is a drop-in decision
+$s >^1_\tau t$ of Definition 8 of the paper. It is a drop-in decision
 procedure rather than an SMT-constraint generator: the parameters
 (precedences, statuses, accessibility, basicness) are fixed inputs
 supplied by the caller, not unknowns.
@@ -39,7 +39,7 @@ ShotTo.compare(fc, c, params)   # => :greater
 
 ### `ShotTo`
 
-- `gt?(s_id, t_id, params \\ default)` — decides `s >¹_τ t`.
+- `gt?(s_id, t_id, params \\ default)` — decides $s >^1_\tau t$.
 - `geq?(s_id, t_id, params \\ default)` — reflexive closure.
 - `compare(s_id, t_id, params \\ default)` — returns `:greater`,
   `:less`, `:equal`, or `:incomparable`.
@@ -49,9 +49,9 @@ ShotTo.compare(fc, c, params)   # => :greater
 A struct with fields
 
 - `sort_precedence` — map or function on atoms giving the rank of each
-  base sort (higher is greater in ≻_S).
+  base sort (higher is greater in $\succ_{\mathcal{S}}$).
 - `const_precedence` — map or function on constant identifiers giving
-  the rank in ≻_F.
+  the rank in $\succ_{\mathcal{F}}$.
 - `status` — map or function assigning `:lex` or `:mul` to each
   constant.
 - `basic_sorts` — `:all`, a MapSet, or a predicate.
@@ -71,31 +71,6 @@ accessible, all constants equivalent with `:lex` status. Under these
 defaults NCPO-LNF reduces to the simple subterm order plus
 lexicographic-in-the-same-head comparison, which is rarely what you
 want; at a minimum supply a `const_precedence`.
-
-## Two notes on the paper and the reference implementation
-
-While implementing I ran into two small points where the implementation
-had to deviate slightly from a literal reading of the NCPO-LNF paper and
-its Haskell prototype
-([`niedjoh/hrsterm`](https://github.com/niedjoh/hrsterm)):
-
-1. The paper's `⟨F=lex⟩` clause reads
-
-    > ∀j > i. f(t̄) >^{b,X} **t_j**
-
-    but the Haskell reference — and the standard RPO lexicographic
-    extension — uses **u_j** (the residual tail of the right-hand side).
-    `ShotTo` follows the reference.
-
-2. The Haskell `ncpoMul` does not reject the "equal multisets" case:
-   for identical multisets both symmetric differences are empty and
-   `and []` vacuously holds, yielding `true`. Inside the reference's
-   SMT-constraint pipeline this appears to be benign because
-   precedence-strictness rules it out at the call sites; for a boolean
-   decision procedure the check needs to be made explicit. `ShotTo`
-   adds an `ss \ ts ≠ ∅` strictness test.
-
-Both are flagged in the module docs of `ShotTo.NCPO`.
 
 ## Status and caveats
 

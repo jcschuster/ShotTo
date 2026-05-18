@@ -10,12 +10,16 @@ Mix.install([
 
 ```elixir
 import ShotDs.Hol.Sigils
+import ShotDs.Hol.Definitions
 ```
 
 ## NCPO Test Cases
 
 ```elixir
 with_context(~e[], fn ->
-  ShotTo.compare(~f"p & q", ~f"(p | ~q) & (q | ~p)")
+  ShotTo.compare(
+    equals_term(type_i()),
+    ~f"^[X:$i, Y:$i]: ![P:$i>$o]: P @ X => P @ Y"
+  )
 end)
 ```
