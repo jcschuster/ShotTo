@@ -1,14 +1,14 @@
 defmodule ShotTo.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.1.1"
   @source_url "https://github.com/jcschuster/ShotTo"
 
   def project do
     [
       app: :shot_to,
       version: @version,
-      elixir: "~> 1.19",
+      elixir: "~> 1.20",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       source_url: @source_url,
