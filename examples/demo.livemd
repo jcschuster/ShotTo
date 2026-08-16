@@ -2,8 +2,7 @@
 
 ```elixir
 Mix.install([
-  {:shot_to, path: Path.expand("..", __DIR__)},
-  # {:shot_to, "~> 0.2"},
+  {:shot_to, "~> 0.2"},
   {:kino, "~> 0.19"}
 ])
 ```
