@@ -8,7 +8,7 @@ defmodule ShotTo.MixProject do
     [
       app: :shot_to,
       version: @version,
-      elixir: "~> 1.19",
+      elixir: "~> 1.20",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       source_url: @source_url,
