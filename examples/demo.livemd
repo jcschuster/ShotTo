@@ -1,25 +1,741 @@
-# Demo of the ShotTo NCPO Implementation
+# Demo of the ShotTo Package
 
 ```elixir
 Mix.install([
-  {:shot_to, path: Path.join(__DIR__, "..")}
+  {:shot_to, path: Path.expand("..", __DIR__)},
+  # {:shot_to, "~> 0.2"},
+  {:kino, "~> 0.19"}
 ])
 ```
 
 ## Setup
 
+**ShotDs** supplies the term representation; **ShotTo** the order on top of it.
+
 ```elixir
-import ShotDs.Hol.Sigils
+import ShotDs.Hol.Dsl
 import ShotDs.Hol.Definitions
+import ShotDs.Hol.Sigils
+alias ShotDs.Data.Type
+alias ShotDs.Stt.TermFactory, as: TF
+alias ShotDs.Util.LatexFormatter, as: LF
+alias ShotTo.{Parameters, TypeOrder}
 ```
 
-## NCPO Test Cases
+Every comparison below is reported as a table of live results, so a small helper
+that turns a list of term pairs into typeset rows saves a lot of repetition.
 
 ```elixir
-with_context(~e[], fn ->
-  ShotTo.compare(
-    equals_term(type_i()),
-    ~f"^[X:$i, Y:$i]: ![P:$i>$o]: P @ X => P @ Y"
+defmodule Show do
+  @moduledoc "Rendering helpers for this notebook."
+
+  alias ShotDs.Util.LatexFormatter, as: LF
+
+  @doc "Renders `s > t` decisions for a list of `{s, t}` pairs."
+  def gt(pairs, params) do
+    rows =
+      Enum.map_join(pairs, "\n", fn {s, t} ->
+        "| $#{LF.format!(s)}$ | $#{LF.format!(t)}$ | `#{ShotTo.gt?(s, t, params)}` |"
+      end)
+
+    Kino.Markdown.new("| $s$ | $t$ | $s >^1_\\tau t$ |\n| :-- | :-- | :-- |\n" <> rows)
+  end
+
+  @doc "Renders `ShotTo.compare/3` verdicts for a list of `{s, t}` pairs."
+  def compare(pairs, params) do
+    rows =
+      Enum.map_join(pairs, "\n", fn {s, t} ->
+        "| $#{LF.format!(s)}$ | $#{LF.format!(t)}$ | `#{inspect(ShotTo.compare(s, t, params))}` |"
+      end)
+
+    Kino.Markdown.new("| $s$ | $t$ | `compare/3` |\n| :-- | :-- | :-- |\n" <> rows)
+  end
+
+  @doc "Renders `TypeOrder.type_gt?/3` decisions for a list of `{T, U}` pairs."
+  def type_gt(pairs, params) do
+    rows =
+      Enum.map_join(pairs, "\n", fn {t, u} ->
+        "| $#{LF.format!(t)}$ | $#{LF.format!(u)}$ | `#{TypeOrder.type_gt?(t, u, params)}` |"
+      end)
+
+    Kino.Markdown.new(
+      "| $T$ | $U$ | $T \\succ_{\\mathcal{T}} U$ |\n| :-- | :-- | :-- |\n" <> rows
+    )
+  end
+end
+```
+
+## What ShotTo decides
+
+`ShotTo` implements **NCPO-LNF**, the βη-long-normal computability path order of
+Niederhauser and Middeldorp,
+[*NCPO goes Beta-Eta-Long Normal Form*](https://www.imn.htwk-leipzig.de/~waldmann/WST2025/proceedings/WST2025_paper_6.pdf)
+(WST 2025). That order is in turn the long-normal adaptation of **NCPO** from
+[*The Computability Path Order for Beta-Eta-Normal Higher-Order Rewriting*](https://arxiv.org/abs/2505.20121),
+which lifts the computability path order (CPO) of Blanqui, Jouannaud and Rubio
+from plain to normal higher-order rewriting.
+
+The point of the construction is that a well-founded order compatible with βη cannot
+also be monotone: take $a > b$ and close under contexts to get
+$(\lambda y. c)\,a > (\lambda y. c)\,b$, i.e. $c > c$ after normalisation. The orders
+in this family therefore come in a *pair* $(>_\tau, \sqsupset_\tau)$ — the
+syntax-directed order $>_\tau$ lives on normal forms and orients rules, while its
+plain cousin $\sqsupset_\tau$ (CPO) carries monotonicity and well-foundedness, the two
+being tied together by βη-normal stability. Orienting $\ell >_\tau r$ for every rule
+of a higher-order rewrite system then proves that system terminating.
+
+`ShotTo` differs from the authors' Haskell prototype in one deliberate way. There,
+the parameters of the order — precedence, statuses, accessible positions, basic
+sorts — are *unknowns* handed to an SMT solver, which searches for an assignment
+that orients a whole rewrite system at once. Here they are *fixed inputs* supplied
+by the caller, which turns $s >^1_\tau t$ into a plain decidable boolean predicate:
+the shape a tableau prover needs when it has to decide, right now, which way to
+orient a single equation.
+
+<!-- livebook:{"break_markdown":true} -->
+
+> #### Terms are already βη-long normal
+> 
+> `ShotDs` stores terms in βη-long normal form and maintains it as an invariant, so
+> the LNF restriction costs nothing here. Two consequences are worth internalising
+> before reading any output below: heads are always **saturated** (a constant of type
+> $\iota\to\iota$ is stored as $\lambda x.\, \mathrm{f}\,x$, never bare), and
+> applications are β-reduced on construction.
+
+```elixir
+f = const "f", type_ii()
+c = const "c", type_i()
+
+Kino.Markdown.new("""
+| built with | stored as |
+| :-- | :-- |
+| `const "f", type_ii()` | $#{LF.format!(f)}$ |
+| `app f, c` | $#{LF.format! app f, c}$ |
+""")
+```
+
+## The rules of NCPO-LNF
+
+Below is Figure 1 of the NCPO-LNF paper, the inductive definition of
+$>^{b,X}$. The relation is parameterised by a finite set $X$ of variables and a
+level $b \in \{0, 1\}$ that keeps $\langle\mathcal{FV}\rangle$ from recurring into itself;
+$s >^{b,X}_\tau t$ additionally demands $\tau(s) \succeq_{\mathcal{T}} \tau(t)$.
+NCPO-LNF is $>^1_\tau$, i.e. $>^{1,\emptyset}_\tau$ — exactly what `ShotTo.gt?/3`
+decides.
+
+<!-- livebook:{"break_markdown":true} -->
+
+| rule                                         | conclusion                           | side conditions                                                                                                                                                                                                          |
+| -------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| $\langle \mathcal{F}\triangleright\rangle$   | $f(\bar t) >^{b,X} v$                | $t_i \trianglerighteq^{\mathsf{nv}}_b \cdot \trianglerighteq_a \cdot \geqslant^b_\tau v$ for some $i$                                                                                                                    |
+| $\langle \mathcal{F}{=}_\mathsf{mul}\rangle$ | $f(\bar t) >^{b,X} g(\bar u)$        | $f \simeq_{\mathcal F} g$, $\mathsf{stat}(f) = \mathsf{mul}$, $\bar t \; (>^b_\tau \cup \vartriangleright^X_@ \cdot \to^!_\beta)_{\mathsf{mul}} \; \bar u$                                                               |
+| $\langle \mathcal{F}{=}_\mathsf{lex}\rangle$ | $f(\bar t) >^{b,X} g(\bar u)$        | $f \simeq_{\mathcal F} g$, $\mathsf{stat}(f) = \mathsf{lex}$, $\exists i.\; t_i >^b_\tau \cup \vartriangleright^X_@ \cdot \to^!_\beta\; u_i$, $\;\forall j < i.\; t_j = u_j$, $\;\forall j > i.\; f(\bar t) >^{b,X} t_j$ |
+| $\langle \mathcal{F}{\succ}\rangle$          | $f(\bar t) >^{b,X} g(\bar u)$        | $f \succ_{\mathcal F} g$ and $f(\bar t) >^{b,X} u_i$ for all $i$                                                                                                                                                         |
+| $\langle \mathcal{FV}\rangle$                | $f(\bar t) >^{1,X} y(\bar u)$        | $f(\bar t) >^{0,X} y{\uparrow^\eta}$ and $f(\bar t) >^{1,X} u_i$ for all $i$                                                                                                                                             |
+| $\langle \mathcal{F}\lambda\rangle$          | $f(\bar t) >^{b,X} \lambda y.v$      | $f(\bar t) >^{b,X \cup \{z\}} v[y/z]$, $\tau(y) = \tau(z)$, $z$ fresh                                                                                                                                                    |
+| $\langle \mathcal{FX}\rangle$                | $f(\bar t) >^{b,X} y{\uparrow^\eta}$ | $y \in X$                                                                                                                                                                                                                |
+| $\langle \lambda\triangleright\rangle$       | $\lambda x.t >^{b,X} v$              | $t[x/z] \geqslant^b_\tau v$, $\tau(x) = \tau(z)$, $z$ fresh                                                                                                                                                              |
+| $\langle \lambda{=}\rangle$                  | $\lambda x.t >^{b,X} \lambda y.v$    | $t[x/z] >^{b,X} v[y/z]$, $\tau(x) = \tau(y) = \tau(z)$, $z$ fresh                                                                                                                                                        |
+| $\langle \lambda{\neq}\rangle$               | $\lambda x.t >^{b,X} \lambda y.v$    | $\lambda x.t >^{b,X} v[y/z]$, $\tau(x) \neq \tau(y) = \tau(z)$, $z$ fresh                                                                                                                                                |
+
+<!-- livebook:{"break_markdown":true} -->
+
+Two families of rules from NCPO are simply gone. There are no $\langle @\cdots\rangle$
+rules, because a term $y(\bar t)$ with a variable head is *versatile* and NCPO never
+compares from a versatile left-hand side; and the **small symbols** extension was
+dropped, because its motivation — applicative, uncurried systems — disappears once
+everything is η-long. The rules $\langle \lambda{\triangleright}\eta\rangle$ and
+$\langle \lambda \mathcal{V}\rangle$ of NCPO are likewise absent.
+
+<!-- livebook:{"break_markdown":true} -->
+
+> #### Where the rules live
+> 
+> `ShotTo.Ncpo.ncpo/6` is the direct transcription of Figure 1: the arguments are $b$, $X$, $s$, $t$, a boolean toggling the $\tau$-check, and the parameters. `ShotTo.gt?/3` enters it at $b = 1$, $X = \varnothing$ with the check on. The auxiliary relations get their own private helpers — `bawo`/`awo` for $\trianglerighteq^{\mathsf{nv}}_b \cdot \trianglerighteq_a \cdot \geqslant^b_\tau$ of $\langle \mathcal{F}\triangleright\rangle$, and `sswo?` for $>^b_\tau \cup \vartriangleright^X_@ \cdot \to^!_\beta$ of the two $\langle \mathcal{F}{=}\rangle$ rules. Note that `lex_ext?/4` discharges the trailing condition of $\langle \mathcal{F}{=}_\mathsf{lex}\rangle$ against the remaining *right-hand* arguments.
+
+## Ingredient 1: the admissible type order
+
+Higher-order path orders lack the subterm property: $f(g(x)) > x$ cannot hold in
+general, since with $f_{a\to a\to a}$ and $g_{(a\to a)\to a}$ that is an encoding of
+the untyped lambda calculus. Recursive descent into a subterm therefore has to be
+paid for with a weak decrease in an order on *types*.
+
+`ShotTo.TypeOrder` implements the concrete admissible order of Lemma 4 of the paper:
+the smallest order containing the sort precedence $\succ_{\mathcal{S}}$ and the
+right-argument relation $T \to U \vartriangleright_r U$, closed under
+right-congruence.
+
+```elixir
+params_t = Parameters.new(sort_precedence: %{a: 2, b: 1, c: 0})
+
+[
+  {~t"a", ~t"b"},
+  {~t"b", ~t"c"},
+  {~t"a>b", ~t"b"},
+  {~t"a>b", ~t"a>c"},
+  {~t"a>b", ~t"b>c"},
+  {~t"c", ~t"b>b"},
+  {~t"a", ~t"b>b"}
+]
+|> Show.type_gt(params_t)
+```
+
+Row four is right-congruence doing its job: $a \to b \succ_{\mathcal{T}} a \to c$
+because $b \succ_{\mathcal{S}} c$ and the left components agree. Row five shows that a
+mismatched left component kills it.
+
+The last two rows are the interesting ones. $c \succ_{\mathcal{T}} b \to b$ must fail
+on pain of unsoundness: $b \to b \vartriangleright_r b$, so it would give
+$c \succ_{\mathcal{T}} b$, contradicting $b \succ_{\mathcal{S}} c$. And
+$a \succ_{\mathcal{T}} b \to b$ fails too, even though $a$ is the largest sort —
+this particular admissible order never lets a base sort exceed an arrow, though
+admissibility in general does permit that.
+
+<!-- livebook:{"break_markdown":true} -->
+
+> #### Uncurried representation
+> 
+> `ShotDs.Data.Type` is uncurried: $T_1 \to \cdots \to T_n \to a$ is
+> `%Type{goal: a, args: [t1, ..., tn]}`. `TypeOrder` is written directly against
+> that shape, so the right-argument relation is "drop the first element of `args`"
+> rather than a peel of a curried spine.
+
+## Ingredient 2: the parameters
+
+__Definition (parameters).__ An instance of NCPO-LNF is fixed by a sort precedence
+$\succ_{\mathcal{S}}$, a precedence $\succeq_{\mathcal{F}}$ on constants with strict
+part $\succ_{\mathcal{F}}$ and equivalence $\simeq_{\mathcal{F}}$, a status
+$\mathsf{stat}(f) \in \{\mathsf{mul}, \mathsf{lex}\}$ per constant, a predicate
+selecting the *basic* sorts, and an accessibility predicate
+$\mathsf{Acc}(f, i)$ on argument positions.
+
+`ShotTo.Parameters` takes each of these as a map, a `MapSet`, `:all`, or a function.
+Precedences are given as integer ranks: equal rank means $\simeq_{\mathcal{F}}$,
+greater rank means $\succ_{\mathcal{F}}$.
+
+```elixir
+params_demo =
+  Parameters.new(
+    sort_precedence: %{o: 1, i: 0},
+    const_precedence: %{"f" => 2, "g" => 1, "c" => 0},
+    status: %{"f" => :lex, "g" => :mul},
+    basic_sorts: :all,
+    accessible: :all
   )
+
+Kino.Markdown.new("""
+| query | result |
+| :-- | :-- |
+| `prec(params, "f")` | `#{Parameters.prec(params_demo, "f")}` |
+| `gt?(params, "f", "g")` | `#{Parameters.gt?(params_demo, "f", "g")}` |
+| `prec(params, "h")` | `#{Parameters.prec(params_demo, "h")}` |
+| `equiv?(params, "h", "c")` | `#{Parameters.equiv?(params_demo, "h", "c")}` |
+| `status(params, "g")` | `#{inspect(Parameters.status(params_demo, "g"))}` |
+| `status(params, "h")` | `#{inspect(Parameters.status(params_demo, "h"))}` |
+| `accessible?(params, "f", 1)` | `#{Parameters.accessible?(params_demo, "f", 1)}` |
+| `basic?(params, :i)` | `#{Parameters.basic?(params_demo, :i)}` |
+""")
+```
+
+`"h"` was never mentioned, so it falls back to rank `0` — as does `"c"`, which makes
+the two equivalent. Unlisted constants are not "smaller than everything"; they collect
+at rank zero, and unlisted statuses default to `:lex`.
+
+<!-- livebook:{"break_markdown":true} -->
+
+`Parameters.from_precedence_list/2` builds the ranks from an ordered list of tiers,
+most-greater first, with inner lists grouping equivalent symbols.
+
+```elixir
+tiered = Parameters.from_precedence_list([["f"], ["g", "h"], ["c"]])
+
+Kino.Markdown.new("""
+| query | result |
+| :-- | :-- |
+| `gt?(p, "f", "g")` | `#{Parameters.gt?(tiered, "f", "g")}` |
+| `equiv?(p, "g", "h")` | `#{Parameters.equiv?(tiered, "g", "h")}` |
+| `gt?(p, "h", "c")` | `#{Parameters.gt?(tiered, "h", "c")}` |
+""")
+```
+
+### Validity of accessibility and basicness
+
+Soundness of the order depends on $\mathsf{Acc}$ and *basic* satisfying the
+compatibility conditions of Definition 5: for an accessible position $i$ of
+$f : T_1 \to \cdots \to T_n \to a$ the sort $a$ must dominate every sort occurring in
+$T_i$, and $a$ basic forces the sorts inside accessible arguments to be basic too.
+`Parameters.validate/2` is a best-effort check against a map of constant types.
+
+```elixir
+const_types = %{"f" => ~t"b>a", "c" => ~t"a"}
+
+bad = Parameters.new(sort_precedence: %{a: 0, b: 1})
+good = Parameters.new(sort_precedence: %{a: 1, b: 0})
+
+Kino.Markdown.new("""
+| sort precedence | `validate/2` |
+| :-- | :-- |
+| $b \\succ a$ (accessible argument outranks the result) | `#{inspect(Parameters.validate(bad, const_types))}` |
+| $a \\succ b$ | `#{inspect(Parameters.validate(good, const_types))}` |
+""")
+```
+
+Leaving `accessible: :all` together with `basic_sorts: :all` is *vacuously* sound —
+the compatibility conditions become trivial — which is why those are the defaults.
+
+## The rules at work
+
+Each rule below gets a minimal witness. The parameters are chosen per example so
+that exactly one rule carries the comparison.
+
+<!-- livebook:{"break_markdown":true} -->
+
+### ⟨ℱ▷⟩ — an argument dominates the right-hand side
+
+The workhorse. $f(\bar t) >^{b,X} v$ whenever some argument $t_i$ reaches $v$ through
+nonversatile descent, accessible subterms, and a final type-checked weak step. With
+the permissive defaults this collapses to the plain argument-subterm order.
+
+```elixir
+f = TF.make_const_term("f", type_ii())
+g = TF.make_const_term("g", type_ii())
+c = TF.make_const_term("c", type_i())
+
+[
+  {app(f, c), c},
+  {app(f, app(g, c)), app(g, c)},
+  {app(f, app(g, c)), c},
+  {c, app(f, c)}
+]
+|> Show.gt(Parameters.new())
+```
+
+### ⟨ℱ≻⟩ — precedence on constants
+
+$f \succ_{\mathcal{F}} g$ is not by itself enough: $f(\bar t)$ must additionally
+dominate *every* argument of the right-hand side. Flipping the precedence flips the
+verdict.
+
+```elixir
+prec_fg = Parameters.new(const_precedence: %{"f" => 2, "g" => 1, "c" => 0})
+prec_gf = Parameters.new(const_precedence: %{"f" => 1, "g" => 2, "c" => 0})
+
+Kino.Layout.grid(
+  [
+    Kino.Markdown.new("**$f \\succ g$**"),
+    Show.gt([{app(f, c), app(g, c)}, {app(g, c), app(f, c)}], prec_fg),
+    Kino.Markdown.new("**$g \\succ f$**"),
+    Show.gt([{app(f, c), app(g, c)}, {app(g, c), app(f, c)}], prec_gf)
+  ],
+  columns: 1
+)
+```
+
+### ⟨ℱ=ₗₑₓ⟩ and ⟨ℱ=ₘᵤₗ⟩ — equivalent heads
+
+When the heads are equivalent the argument lists are compared by the head's status.
+Both extensions are strict: identical argument lists never yield $>$.
+
+```elixir
+h = const "h", type_iii()
+a = const "a", type_i()
+b = const "b", type_i()
+
+lex = Parameters.new(const_precedence: %{"h" => 2, "a" => 1, "b" => 0}, status: %{"h" => :lex})
+mul = Parameters.new(const_precedence: %{"h" => 2, "a" => 1, "b" => 0}, status: %{"h" => :mul})
+
+Kino.Layout.grid(
+  [
+    Kino.Markdown.new("**$\\mathsf{stat}(h) = \\mathsf{lex}$**"),
+    Show.gt(
+      [
+        {app(h, [a, a]), app(h, [a, b])},
+        {app(h, [a, b]), app(h, [a, a])},
+        {app(h, [a, a]), app(h, [a, a])}
+      ],
+      lex
+    ),
+    Kino.Markdown.new("**$\\mathsf{stat}(h) = \\mathsf{mul}$**"),
+    Show.gt(
+      [
+        {app(h, [a, a]), app(h, [a, b])},
+        {app(h, [a, b]), app(h, [a, a])},
+        {app(h, [a, a]), app(h, [a, a])}
+      ],
+      mul
+    )
+  ],
+  columns: 1
+)
+```
+
+### ⟨ℱ𝒱⟩ — a variable-headed right-hand side
+
+$\langle\mathcal{FV}\rangle$ is the LNF replacement for NCPO's $\langle \mathcal{F}@\rangle$. It is the
+only rule that consumes the level parameter: the head check $f(\bar t) >^{0,X}
+y{\uparrow}\eta$ runs at $b = 0$, where $\langle FV\rangle$ itself is unavailable, so
+the recursion cannot spiral. Below, $Y$ occurs as an argument of $f$, which is what
+lets $\langle F\triangleright\rangle$ discharge the head check.
+
+```elixir
+f2 = const "f", Type.new(:i, [type_ii(), :i])
+y = var "Y", type_ii()
+
+[{app(f2, [y, c]), app(y, c)}]
+|> Show.gt(Parameters.new(const_precedence: %{"f" => 2, "c" => 1}))
+```
+
+### ⟨ℱλ⟩ and ⟨ℱ𝒳⟩ — descending under a binder
+
+$\langle \mathcal{F}\lambda\rangle$ opens an abstraction on the right with a fresh $z$ and
+records $z$ in $X$; $\langle \mathcal{FX}\rangle$ then discharges any later goal that is
+exactly that variable. The two are useless apart.
+
+The comparison has to be reached from a $\tau$-free recursive call: the outer
+$\tau$-check would compare a base-typed left-hand side against an arrow type and
+fail. Here $\langle \mathcal{F}{\succ}\rangle$ provides that call.
+
+```elixir
+k = const "k", type_i()
+gg = const "gg", Type.new(:i, [type_ii()])
+id = lambda type_i(), fn x -> x end
+
+[{k, app(gg, id)}]
+|> Show.gt(Parameters.new(const_precedence: %{"k" => 3, "gg" => 2}))
+```
+
+```mermaid
+graph TD
+  A["$$k > gg(\lambda x. x)$$"] -->|"$$\langle \mathcal{F} {\succ} \rangle: k \succ gg$$"| B["$$k >^{1,\varnothing} \lambda x. x$$"]
+  B -->|"$$\langle\mathcal{F}\lambda\rangle : \text{ open with fresh } z, X \gets \{z\}$$"| C["$$k >^{1,\{z\}} z$$"]
+  C -->|"$$\langle\mathcal{FX}\rangle : z \in X$$"| D["✓"]
+  classDef ok fill:#dcfce7,stroke:#16a34a;
+  class D ok;
+```
+
+<!-- livebook:{"break_markdown":true} -->
+
+### ⟨λ▷⟩ and ⟨λ=⟩ — an abstraction on the left
+
+$\langle \lambda\triangleright\rangle$ opens the left abstraction and asks for a
+type-checked weak step from its body. $\langle \lambda{=}\rangle$ applies when both
+sides are abstractions with binders of the same type: it reuses one fresh $z$ for
+both and drops the $\tau$-check on the recursive goal.
+
+Recall that $f_{\iota\to\iota}$ *is* $\lambda x.\, f\,x$ in LNF, so the second row is
+a λ-vs-λ comparison even though it does not look like one.
+
+```elixir
+lam_fc = lambda type_i(), fn _ -> app(f, c) end
+lam_c = lambda type_i(), fn _ -> c end
+
+[
+  {lam_fc, c},
+  {f, lam_c},
+  {lam_c, f}
+]
+|> Show.gt(Parameters.new(const_precedence: %{"f" => 2, "c" => 1}))
+```
+
+$\langle \lambda{\neq}\rangle$ — the case where the two binders have *different*
+types — is the one rule no example in this notebook triggers. It is reachable only
+from a $\tau$-free recursive call, since the admissible type order of Lemma 4 relates
+two arrow types only when their argument types agree position-wise.
+
+## Case study: negation normal form
+
+This is Example 7 of the NCPO paper: computing negation normal forms of first-order
+formulas, as an HRS. It is the example that motivates *accessible subterms* —
+NHORPO fails on it, with or without neutralization.
+
+Two base sorts, $t$ for terms and $f$ for formulas; connectives
+$\neg_{f\to f}$, $\wedge, \vee_{f\to f\to f}$ and quantifiers
+$\forall, \exists_{(t\to f)\to f}$; variables $P, Q$ of sort $f$ and $R$ of type
+$t \to f$.
+
+```elixir
+neg = const "¬", ~t"f>f"
+conj = const "∧", ~t"f>f>f"
+disj = const "∨", ~t"f>f>f"
+all = const "∀", ~t"(t>f)>f"
+ex = const "∃", ~t"(t>f)>f"
+
+p = var "P", ~t"f"
+q = var "Q", ~t"f"
+r = var "R", ~t"t>f"
+
+nnf =
+  Parameters.new(
+    sort_precedence: %{f: 1, t: 0},
+    const_precedence: %{"¬" => 1, "∧" => 0, "∨" => 0, "∀" => 0, "∃" => 0},
+    status: fn _ -> :mul end
+  )
+
+[
+  {app(neg, app(neg, p)), p},
+  {app(neg, app(conj, [p, q])), app(disj, [app(neg, p), app(neg, q)])},
+  {app(neg, app(disj, [p, q])), app(conj, [app(neg, p), app(neg, q)])},
+  {app(neg, app(all, r)), app(ex, lambda(~t"t", fn x -> app(neg, app(r, x)) end))},
+  {app(neg, app(ex, r)), app(all, lambda(~t"t", fn x -> app(neg, app(r, x)) end))}
+]
+|> Show.gt(nnf)
+```
+
+All five rules orient, so the system is terminating. Orientation is also *strict*:
+none of the five holds the other way round, and a plausible-looking non-rule is
+refused.
+
+```elixir
+[
+  {p, app(neg, app(neg, p))},
+  {app(disj, [app(neg, p), app(neg, q)]), app(neg, app(conj, [p, q]))},
+  {app(ex, lambda(~t"t", fn x -> app(neg, app(r, x)) end)), app(neg, app(all, r))},
+  {app(neg, app(all, r)), app(ex, lambda(~t"t", fn x -> app(neg, app(neg, app(r, x))) end))}
+]
+|> Show.gt(nnf)
+```
+
+The quantifier rule is where the machinery earns its keep. $\forall R >_\tau R\,x$ is
+hopeless — $x$ does not occur on the left at all — so the structurally-smaller
+relation $\vartriangleright^X_@$ has to supply the step instead.
+
+<!-- livebook:{"break_markdown":true} -->
+
+```mermaid
+graph TD
+  A["$$\neg(\forall R) > \exists(\lambda x. \neg (R x))$$"] ==>|"$$\langle\mathcal{F}{\succ}\rangle : \neg \succ \exists$$"| B["$$\neg(\forall R) >^{1,\varnothing} \lambda x. \neg(R x)$$"]
+  B -->|"$$\langle\mathcal{F}\lambda\rangle : \text{ fresh } z, X \gets \{z\}$$"| C["$$\neg(\forall R) >^{1,\{z\}} \neg(R z)$$"]
+  C ==>|"$$\langle\mathcal{F}{=_\mathsf{mul}}\rangle : \neg \simeq \neg$$"| D["$$\forall R  (>_\tau \cup \rhd_@^{z} \cdot \to^!_\beta)_\mathsf{mul}  R z$$"]
+  D -->|"$$\tau(\forall R) = \tau(R z) = f$$"| E["$$\forall R \rhd_a R \text{ via } \mathsf{Acc}(\forall) \ni 1$$"]
+  E -->|"$$Pos_f(t) = \varnothing\text{, so }z\text{ is admissible}$$"| F["✓"]
+  classDef ok fill:#dcfce7,stroke:#16a34a;
+  class F ok;
+```
+
+<!-- livebook:{"break_markdown":true} -->
+
+The right branch is exactly the payoff of accessible subterms. Since
+$f \mathrel{\dot\geqslant_{\mathcal B}} t \to f$ and
+$\mathcal{P}\mathsf{os}_f(t \to f) \subseteq \mathcal{P}\mathsf{os}^+(t \to f)$, position $1$ of
+$\forall$ may be declared accessible, giving $\forall R \vartriangleright_a R$; and
+because $\mathcal{P}\mathsf{os}_f(t) = \varnothing$, the fresh $z$ collected by
+$\langle \mathcal{F}\lambda\rangle$ may be applied to it. That is $\vartriangleright^X_@$ in
+full.
+
+<!-- livebook:{"break_markdown":true} -->
+
+Which of the four parameters actually carry this proof? Perturbing them one at a time
+answers that, and the answer is not the one the paper's presentation suggests.
+
+```elixir
+prop_rule = {app(neg, app(neg, p)), p}
+quant_rule = {app(neg, app(all, r)), app(ex, lambda(~t"t", fn x -> app(neg, app(r, x)) end))}
+
+variants = [
+  {"as above", nnf},
+  {"`accessible: MapSet.new()`", %{nnf | accessible: MapSet.new()}},
+  {"`const_precedence: %{}`", %{nnf | const_precedence: %{}}},
+  {"`sort_precedence: %{}`", %{nnf | sort_precedence: %{}}},
+  {"`basic_sorts: MapSet.new()`", %{nnf | basic_sorts: MapSet.new()}}
+]
+
+rows =
+  Enum.map_join(variants, "\n", fn {label, ps} ->
+    "| #{label} | `#{ShotTo.gt?(elem(prop_rule, 0), elem(prop_rule, 1), ps)}` " <>
+      "| `#{ShotTo.gt?(elem(quant_rule, 0), elem(quant_rule, 1), ps)}` |"
+  end)
+
+Kino.Markdown.new(
+  "| parameters | $\\neg\\neg P$ rule | $\\neg \\forall R$ rule |\n| :-- | :-- | :-- |\n" <> rows
+)
+```
+
+Accessibility and the constant precedence are load-bearing for the quantifier rule;
+the sort precedence and the choice of basic sorts are not. The reason both survive
+their removal is that the quantifier rule's type obligation is
+$\tau(\forall R) = \tau(R\,x) = f$ — an *equality*, discharged by the reflexive part
+of $\succeq_{\mathcal{T}}$ — and `basic_sorts` only gates the nonversatile descent in
+$\langle \mathcal{F}\triangleright\rangle$, which this derivation reaches via
+$\vartriangleright_a$ instead. The propositional rules need neither: pure
+$\langle \mathcal{F}\triangleright\rangle$ and $\langle \mathcal{F}{=}_\mathsf{mul}\rangle$ carry them.
+
+## Case study: symbolic differentiation
+
+Example 6 of the NCPO paper, and a good illustration of what changes when the order
+moves to long normal forms.
+
+$$\mathrm{diff}(\lambda x.\, \sin(F\,x)) \to (\lambda x.\, \cos(F\,x)) \times \mathrm{diff}(F)$$
+
+$$\mathrm{diff}(F \times G) \to (\mathrm{diff}(F) \times G) + (F \times \mathrm{diff}(G))$$
+
+The paper fixes $\mathsf{ar}(\mathrm{diff}) = 1$ and
+$\mathsf{ar}(+) = \mathsf{ar}(\times) = 2$, so $\mathrm{diff}(F)$ is a term of type
+$r \to r$. In LNF that partial application does not exist: heads are saturated, so
+$\mathrm{diff}$ has arity $2$, $+$ and $\times$ have arity $3$, and
+$\mathrm{diff}(F)$ is stored as $\lambda y.\, \mathrm{diff}(F, y)$.
+
+```elixir
+diff_rules = with_context(
+  ~e[F: r>r, G: r>r, sin: r>r, cos: r>r,
+     diff: (r>r)>r>r, times: (r>r)>(r>r)>r>r, plus: (r>r)>(r>r)>r>r], fn ->
+  [
+    {~g{ diff @ ^[X: r]: (sin @ (F @ X)) },
+     ~g{ times @ (^[X: r]: (cos @ (F @ X))) @ (diff @ F) }},
+    
+    {~g{ diff @ (times @ F @ G) },
+     ~g{ plus @ (times @ (diff @ F) @ G) @ (times @ F @ (diff @ G)) }}
+  ]
 end)
+
+Kino.Markdown.new("Left-hand side of rule 1, as stored: $#{LF.format!(elem(hd(diff_rules), 0))}$")
+```
+
+The paper gives all symbols multiset status. That no longer works here, and the
+reason is the saturation: after $\langle \lambda{=}\rangle$ peels the outer binder,
+the recursive goal
+$\mathrm{diff}(\ldots, z) >^{1,X} \mathrm{diff}(F, w)$ compares argument
+*pairs* whose second components are two unrelated fresh variables, which no multiset
+comparison can relate. Lexicographic status walks the arguments left to right
+instead, decides at position 1, and is left with $\mathrm{diff}(\ldots) > w$, which
+$\langle \mathcal{FX}\rangle$ discharges.
+
+```elixir
+prec_diff = %{"diff" => 1, "sin" => 0, "cos" => 0, "+" => 0, "×" => 0}
+
+all_mul = Parameters.new(const_precedence: prec_diff, status: fn _ -> :mul end)
+all_lex = Parameters.new(const_precedence: prec_diff, status: fn _ -> :lex end)
+
+diff_lex =
+  Parameters.new(
+    const_precedence: prec_diff,
+    status: fn name -> if name == "diff", do: :lex, else: :mul end
+  )
+
+Kino.Markdown.new("""
+| status | rule 1 | rule 2 |
+| :-- | :-- | :-- |
+| all $\\mathsf{mul}$ | `#{ShotTo.gt?(elem(hd(diff_rules), 0), elem(hd(diff_rules), 1), all_mul)}` | `#{ShotTo.gt?(elem(List.last(diff_rules), 0), elem(List.last(diff_rules), 1), all_mul)}` |
+| all $\\mathsf{lex}$ | `#{ShotTo.gt?(elem(hd(diff_rules), 0), elem(hd(diff_rules), 1), all_lex)}` | `#{ShotTo.gt?(elem(List.last(diff_rules), 0), elem(List.last(diff_rules), 1), all_lex)}` |
+| $\\mathrm{diff}$ $\\mathsf{lex}$, rest $\\mathsf{mul}$ | `#{ShotTo.gt?(elem(hd(diff_rules), 0), elem(hd(diff_rules), 1), diff_lex)}` | `#{ShotTo.gt?(elem(List.last(diff_rules), 0), elem(List.last(diff_rules), 1), diff_lex)}` |
+""")
+```
+
+Only $\mathrm{diff}$'s status matters, which confirms the diagnosis: it is the sole
+symbol that ends up compared against itself with a saturated argument list.
+
+## Using ShotTo as an orientation oracle
+
+The reason `ShotTo` exists is to answer one question for a higher-order prover:
+*given an equation, which way should I rewrite?* Here is that question for the
+definitional expansions of equality that a HOL prover has to choose between —
+primitive equality $=^\iota$ versus its Leibniz encoding.
+
+```elixir
+prim = equals_term type_i()
+leibniz = leibniz_equality type_i()
+
+Kino.Markdown.new("""
+- primitive: $#{LF.format!(prim)}$
+- Leibniz: $#{LF.format!(leibniz)}$
+""")
+```
+
+```elixir
+expand = Parameters.new(const_precedence: %{"=" => 1})
+flat = Parameters.new(const_precedence: %{"=" => 0, "∀" => 1, "≡" => 2})
+
+Kino.Layout.grid(
+  [
+    Kino.Markdown.new("**$= \\;\\succ\\; \\forall, \\equiv$ — expand equality**"),
+    Show.compare([{prim, leibniz}], expand),
+    Kino.Markdown.new("**$\\equiv \\;\\succ\\; \\forall \\;\\succ\\; =$ — no orientation**"),
+    Show.compare([{prim, leibniz}], flat)
+  ],
+  columns: 1
+)
+```
+
+With $=$ at the top of the precedence the expansion is oriented left to right: the
+prover may replace $X = Y$ by $\forall P.\; P\,X \equiv P\,Y$ and know the process
+terminates. Reversing the precedence does not orient it the other way — it yields
+`:incomparable`, since contracting the Leibniz encoding back to $=$ would have to
+grow the head's rank without shrinking anything else.
+
+## Caveats
+
+### NCPO-LNF is not known to be transitive
+
+Transitivity is stated as an open problem in both papers. It is not a theoretical
+worry: witnesses are easy to come by, and small.
+
+```elixir
+p_a = const "p", ~t"a"
+q_b = const "q", ~t"b"
+lam_p = lambda ~t"b", fn _ -> p_a end
+
+trans = Parameters.new(sort_precedence: %{a: 1, b: 0}, const_precedence: %{"p" => 1, "q" => 0})
+
+[
+  {lam_p, p_a},
+  {p_a, q_b},
+  {lam_p, q_b}
+]
+|> Show.gt(trans)
+```
+
+$\lambda x_b.\, p > p$ by $\langle \lambda\triangleright\rangle$, and $p > q$ by
+$\langle F\succ\rangle$ — but $\lambda x_b.\, p > q$ fails, and it fails in the type
+order rather than in the term rules: $\tau(\lambda x_b.\,p) = b \to a$ and
+$\tau(q) = b$, and $b \to a \succeq_{\mathcal{T}} b$ does not hold.
+
+```elixir
+[{~t"b>a", ~t"b"}, {~t"b>a", ~t"a"}, {~t"a", ~t"b"}]
+|> Show.type_gt(trans)
+```
+
+The practical consequence is the one stated in the README: use `ShotTo` to decide the
+orientation of **one pair at a time**. Using `ShotTo.compare/3` as a sort comparator
+over a collection of terms is not sound.
+
+<!-- livebook:{"break_markdown":true} -->
+
+### Incomparability is a real outcome
+
+`compare/3` has four outcomes, not three. Two constants of the same type and
+equivalent rank are simply unrelated.
+
+```elixir
+d = const "d", type_i()
+equal_rank = Parameters.new(const_precedence: %{"c" => 1, "d" => 1})
+
+[
+  {app(f, c), c},
+  {c, app(f, c)},
+  {c, c},
+  {c, d}
+]
+|> Show.compare(equal_rank)
+```
+
+### ETS hygiene
+
+Every lambda opening allocates a fresh `ShotDs` free variable, and
+$\langle \mathcal{F}\lambda\rangle$, $\langle \lambda{\triangleright}\rangle$,
+$\langle \lambda{=}\rangle$ and $\langle \lambda{\neq}\rangle$ all open lambdas. A
+single `ShotTo.gt?/3` call can therefore mint a good number of them.
+
+`ShotTo.Ncpo.ncpo_gt?/3` already wraps each comparison in a scratchpad when none is
+active, so the fresh variables die with the call. Callers running many comparisons in
+a batch can hoist that: opening one scratchpad around the whole batch keeps every
+intermediate variable out of the global term pool at once.
+
+```elixir
+batch = for s <- [app(f, c), c, lam_fc, lam_c], t <- [c, app(f, c), lam_c], do: {s, t}
+
+oriented =
+  TF.with_scratchpad!(fn ->
+    Enum.count(batch, fn {s, t} -> ShotTo.gt?(s, t, Parameters.new()) end)
+  end)
+
+Kino.Markdown.new("`#{oriented}` of `#{length(batch)}` pairs oriented, one scratchpad.")
 ```
