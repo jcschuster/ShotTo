@@ -93,7 +93,7 @@ Add `shot_to` to your dependencies:
 ```elixir
 def deps do
   [
-    {:shot_to, "~> 0.1"}
+    {:shot_to, "~> 0.2"}
   ]
 end
 ```
