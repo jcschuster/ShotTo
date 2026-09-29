@@ -1,0 +1,30 @@
+{
+  "title": "ShotTo",
+  "upload_type": "software",
+  "version": "0.2.1",
+  "license": "MIT",
+  "description": "ShotTo is an Elixir implementation of NCPO-LNF, the βη-long normal form variant of the Computability Path Order of Niederhauser and Middeldorp, for ordering terms of Church's simple type theory as represented by ShotDs. It serves as the orientation order of the Shot higher-order tableau prover.",
+  "creators": [
+    {
+      "name": "Schuster, Johannes",
+      "affiliation": "Otto-Friedrich-Universität Bamberg, Germany",
+      "orcid": "0009-0003-5339-7216"
+    }
+  ],
+  "keywords": [
+    "term ordering",
+    "computability path order",
+    "NCPO",
+    "higher-order rewriting",
+    "higher-order logic",
+    "Elixir",
+    "BEAM"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/jcschuster/ShotTo",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    }
+  ]
+}

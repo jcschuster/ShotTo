@@ -1,7 +1,7 @@
 defmodule ShotTo.MixProject do
   use Mix.Project
 
-  @version "0.2.0"
+  @version "0.2.1"
   @source_url "https://github.com/jcschuster/ShotTo"
 
   def project do
@@ -62,7 +62,7 @@ defmodule ShotTo.MixProject do
       links: %{
         "GitHub" => @source_url
       },
-      files: ~w(lib LICENSE mix.exs README.md)
+      files: ~w(lib LICENSE mix.exs README.md CITATION.cff)
     ]
   end
 
