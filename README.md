@@ -1,5 +1,7 @@
 # ShotTo
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23044598.svg)](https://doi.org/10.5281/zenodo.23044598)
+
 **ShotTo** is an Elixir implementation of NCPO-LNF — the βη-long-normal
 Computability Path Order of Niederhauser and Middeldorp, _NCPO goes
 Beta-Eta-Long Normal Form_ (2025) — for ordering terms of Church's simple
